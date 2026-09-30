@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Hungry Fish Frenzy</title>
+<style>
+:root{--ink:#fff6d6;--gold:#ffb02e}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#06264a;overflow:hidden;touch-action:none;font-family:"Trebuchet MS","Sarabun",sans-serif;user-select:none;-webkit-user-select:none}
+canvas{display:block;width:100%;height:100%}
+#ov{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--ink);text-align:center;background:rgba(3,20,45,.6);padding:14px;overflow:auto}
+#ov.hide{display:none}
+h1{margin:0;font-size:clamp(30px,7vw,60px);color:var(--gold);text-shadow:0 4px 0 #a5421a,0 8px 18px #000a}
+p{margin:0;max-width:460px;line-height:1.5}
+ul{margin:0;padding-left:20px;max-width:480px;text-align:left;line-height:1.55;font-size:15px}
+button{font:inherit;font-size:19px;color:var(--ink);background:rgba(20,80,140,.9);border:3px solid #8fd3ff;border-radius:40px;padding:10px 30px;min-width:210px;cursor:pointer}
+button:active{transform:scale(.96)}
+#joy,#suck{position:fixed;bottom:20px;display:none;touch-action:none}
+#joy.show,#suck.show{display:block}
+#joy{left:22px;width:140px;height:140px;border-radius:50%;background:rgba(255,255,255,.12);border:3px solid rgba(255,255,255,.4)}
+#knob{position:absolute;left:50%;top:50%;margin:-28px 0 0 -28px;width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.55);pointer-events:none}
+#suck{right:22px;width:96px;height:96px;min-width:0;padding:0;border-radius:50%;font-size:18px;background:rgba(255,140,40,.88);border-color:#ffe0a0}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="joy"><div id="knob"></div></div>
+<button id="suck">ดูด</button>
+<div id="ov"></div>
+<script>
+const $=id=>document.getElementById(id),cv=$('c'),ctx=cv.getContext('2d'),ov=$('ov'),sb=$('suck'),joy=$('joy'),knob=$('knob');
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+let W,H,u=1,weeds=[];
+function resize(){const d=devicePixelRatio||1;W=innerWidth;H=innerHeight;u=clamp(H/520,.6,1.4);cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0);
+ weeds=[];for(let i=0;i<Math.ceil(W/70);i++)weeds.push({x:i*70+Math.random()*40,h:50+Math.random()*90,p:Math.random()*6})}
+addEventListener('resize',resize);resize();
+
+let best=0;try{best=+localStorage.getItem('hff_best')||0}catch(e){}
+const S={mode:'menu',stage:1,score:0,t:0,time:180,fish:[],parts:[],bub:[],spT:0,monT:14,ban:0,bt:'',eaten:0,stolen:0,lost:0,combo:1,comboT:0,eatT:0,sucking:false,energy:1,flash:0,inp:{x:0,y:0}};
+const P={x:0,y:0,vx:0,vy:0,dir:1,r:12,mo:0,kids:[]};
+const keys={};
+
+/* ---------- เสียง ---------- */
+let AC,mute=false;
+function initAudio(){try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();AC.resume()}catch(e){}}
+function tone(ty,f0,f1,d,v,dl){setTimeout(()=>{if(mute||!AC)return;const t=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type=ty;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(f1,t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+d)},dl||0)}
+const SND={eat:()=>tone('sine',420,980,.12,.25),steal:()=>tone('triangle',700,1300,.1,.2),chomp:()=>tone('sawtooth',180,60,.15,.2),
+ warn:()=>{tone('sawtooth',55,35,1.6,.4);[0,350,700].forEach((d,i)=>tone('square',i%2?330:440,i%2?330:440,.28,.15,d))},
+ rumble:()=>tone('sawtooth',90,45,.7,.25),die:()=>{tone('sawtooth',320,40,.9,.3);tone('square',120,30,.9,.2)},
+ win:()=>[523,659,784,1047].forEach((f,i)=>tone('triangle',f,f,.25,.25,i*130))};
+const snd=n=>SND[n]();
+addEventListener('pointerdown',initAudio);
+
+/* ---------- หน้าจอ/เมนู ---------- */
+function ui(on){joy.classList.toggle('show',on);sb.classList.toggle('show',on)}
+function menu(){S.mode='menu';ui(false);ov.className='';
+ ov.innerHTML='<h1>Hungry Fish Frenzy</h1><p>เริ่มจากปลากากตัวเล็ก กินให้โต แย่งลูกปลา และเอาตัวรอดให้ครบ 3 นาที</p><button onclick="startGame()">เริ่มเกม</button><button onclick="help()">วิธีเล่น</button><button onclick="tg(this)">เสียง: '+(mute?'ปิด':'เปิด')+'</button><p style="font-size:14px;opacity:.8">คะแนนสูงสุด '+best+'</p>'}
+function tg(b){mute=!mute;b.textContent='เสียง: '+(mute?'ปิด':'เปิด')}
+function help(){S.mode='help';ov.innerHTML='<h1 style="font-size:clamp(26px,5vw,42px)">วิธีเล่น</h1><ul><li>ว่ายด้วยจอยสติ๊กซ้ายล่าง (คอม: WASD หรือลูกศร) กดปุ่ม "ดูด" ขวาล่าง (คอม: Space)</li><li>ทุกด่านเริ่มด้วย "ปลากาก" ตัวเล็ก ต้องรอดให้ครบ 3 นาทีเพื่อผ่านด่าน</li><li>ชนปลาที่เล็กกว่า = กินได้ ปลาที่กินจะกลายเป็น "ลูก" วนอยู่รอบตัว ยิ่งลูกเยอะวงล้อมยิ่งใหญ่ขึ้น</li><li>ปลาที่ใหญ่กว่าจะอ้าปากดูดลูกของคุณก่อน แต่ถ้าปากมันโดนตัวหลัก คุณตายทันที</li><li>กดดูดใกล้ปลาที่มีลูกน้อยกว่าคุณ เพื่อแย่งลูกของมันมาเข้าวงคุณ</li><li>ระวังสัตว์ประหลาด (ฉลามยักษ์ ปลาหมึกยักษ์) จะมีเสียงและป้ายเตือนก่อนมา</li><li>ผ่านด่านแล้วปลากากเลเวลสูงขึ้นเล็กน้อย แต่ศัตรูก็โหดขึ้นด้วย</li></ul><button onclick="menu()">กลับ</button>'}
+function stats(){return 'ด่าน '+S.stage+' · กินปลาไป '+S.eaten+' ตัว<br>แย่ง/ดูดซับลูกมา '+S.stolen+' · เสียลูก '+S.lost+'<br>คะแนน '+S.score+' (สูงสุด '+best+')'}
+function panel(t,btn,fn){S.mode='panel';ui(false);ov.className='';
+ ov.innerHTML='<h1 style="font-size:clamp(26px,5vw,44px)">'+t+'</h1><p>'+stats()+'</p><button id="pb">'+btn+'</button><button onclick="menu()">เมนูหลัก</button>';$('pb').onclick=fn}
+function saveBest(){if(S.score>best){best=S.score;try{localStorage.setItem('hff_best',best)}catch(e){}}}
+
+function startGame(){Object.assign(S,{stage:1,score:0,eaten:0,stolen:0,lost:0});beginStage()}
+function beginStage(){Object.assign(S,{mode:'play',time:180,fish:[],parts:[],monT:14,spT:0,combo:1,comboT:0,energy:1,ban:3,bt:'ด่าน '+S.stage+' · ปลากาก Lv.'+S.stage,flash:0});
+ P.kids=[];P.x=W/2;P.y=H/2;P.vx=P.vy=0;ov.className='hide';ui(true)}
+function die(){snd('die');saveBest();S.mode='dead';setTimeout(()=>panel('ปลากากถูกกินแล้ว!','เล่นใหม่',startGame),700)}
+function win(){S.score+=500*S.stage;saveBest();snd('win');panel('รอดครบ 3 นาที!','ด่านต่อไป',()=>{S.stage++;beginStage()})}
+
+/* ---------- เกม ---------- */
+// คำนวณตำแหน่งลูกปลา
+const kpos=i=>{
+ const a=S.t*1.6+i*2.399;
+ const r=P.r*1.25+5*u*Math.sqrt(i+1);
+ return[P.x+Math.cos(a)*r,P.y+Math.sin(a)*r]
+};
+
+// คำนวณรัศมีของวงล้อม (จะขยายใหญ่ขึ้นตามจำนวนลูกปลา)
+function getZoneRadius(){
+ if(P.kids.length===0) return P.r * 1.5;
+ const maxKidR = P.r*1.25 + 5*u*Math.sqrt(P.kids.length);
+ return maxKidR + 8*u;
+}
+
+function findKid(mx,my,R){for(let i=P.kids.length-1;i>=0;i--){const p=kpos(i);if(Math.hypot(p[0]-mx,p[1]-my)<R)return i}return-1}
+function burst(x,y,h){for(let i=0;i<8;i++)S.parts.push({x,y,vx:(Math.random()-.5)*180,vy:(Math.random()-.5)*180,l:.6,h})}
+
+function spawn(mon){
+ const side=Math.random()<.5?-1:1,R=P.r;let r,sp,type='fish',hue=Math.random()*360;
+ if(mon){type=(S.stage>1&&Math.random()<.6)?'squid':'shark';r=Math.min(R*2.8+14*u,H*.3);sp=(type==='squid'?70:130)*u*(1+S.stage*.05);hue=type==='squid'?330:210}
+ else{const big=Math.min(.18+S.stage*.03,.42);r=Math.random()<big?R*(1.15+Math.random()*.9):R*(.3+Math.random()*.6);r=Math.min(r,H*.25);sp=(40+Math.random()*60)*u*(1+S.stage*.06)}
+ r=Math.max(6*u,r);
+ const k=Math.max(0,Math.round(r/u/(mon?2.5:4)*(mon?1:.6+Math.random()*.8)));
+ const f={x:side<0?-r*2:W+r*2,y:70+Math.random()*(H-90),r,vx:-side*sp,dir:-side,ph:Math.random()*6,hue,type,k,cd:0,sc:0,mo:0,mt:0,edible:false};
+ S.fish.push(f);
+ if(mon){snd('warn');S.ban=2.6;S.bt='⚠ สัตว์ประหลาดมาแล้ว!';S.flash=2.6}else if(r>R*1.7)snd('rumble');
+}
+function eat(f,i){S.fish.splice(i,1);const g=1+Math.ceil(f.k/2);for(let j=0;j<g&&P.kids.length<150;j++)P.kids.push(f.hue);
+ S.eaten++;S.stolen+=f.k;S.combo=Math.min(5,S.combo+(S.comboT>0?1:0));S.comboT=2.2;S.score+=Math.round((10+f.k*5)*S.combo);S.eatT=.25;burst(f.x,f.y,f.hue);snd('eat')}
+
+function update(dt){
+ S.t+=dt;
+ if(S.mode!=='play')return;
+ S.time-=dt;if(S.time<=0){win();return}
+ S.ban=Math.max(0,S.ban-dt);S.flash=Math.max(0,S.flash-dt);S.eatT=Math.max(0,S.eatT-dt);S.comboT-=dt;if(S.comboT<=0)S.combo=1;
+ P.r=Math.min(64,9+(S.stage-1)*1.5+P.kids.length)*u;
+ let ix=S.inp.x,iy=S.inp.y;
+ if(!ix&&!iy){ix=(keys.ArrowRight||keys.KeyD?1:0)-(keys.ArrowLeft||keys.KeyA?1:0);iy=(keys.ArrowDown||keys.KeyS?1:0)-(keys.ArrowUp||keys.KeyW?1:0)}
+ const m=Math.hypot(ix,iy);if(m>1){ix/=m;iy/=m}
+ const sp=210*u*(1+(S.stage-1)*.04)*(1-Math.min(.3,P.r/(u*230)));
+ P.vx+=(ix*sp-P.vx)*Math.min(1,dt*7);P.vy+=(iy*sp-P.vy)*Math.min(1,dt*7);
+ P.x=clamp(P.x+P.vx*dt,0,W);P.y=clamp(P.y+P.vy*dt,40,H-8);
+ if(Math.abs(ix)>.2)P.dir=ix>0?1:-1;
+ S.spT-=dt;if(S.spT<=0&&S.fish.length<24){spawn();S.spT=.3+Math.random()*.35}
+ S.monT-=dt;if(S.monT<=0){spawn(1);S.monT=Math.max(9,22-S.stage*2)+Math.random()*6}
+ const mx=P.x+P.dir*P.r*.85,suck=S.sucking&&S.energy>0;let near=0;
+ S.energy=suck?Math.max(0,S.energy-dt*.4):Math.min(1,S.energy+dt*.2);
+ for(let i=S.fish.length-1;i>=0;i--){const f=S.fish[i];
+  f.dir=f.vx>0?1:-1;f.x+=f.vx*dt;f.y+=Math.sin(S.t*2+f.ph)*20*u*dt;f.cd-=dt;f.sc-=dt;
+  f.edible=f.type==='fish'&&f.r<P.r*.95;
+  if(f.x<-f.r*4||f.x>W+f.r*4){S.fish.splice(i,1);continue}
+  if(suck&&f.type==='fish'){const fx=(f.x-mx)*P.dir,fy=f.y-P.y,R=150*u+P.r*2;
+   if(fx>-P.r&&fx<R&&Math.abs(fy)<R*.6){
+    if(f.edible){f.x+=(mx-f.x)*dt*5;f.y+=(P.y-f.y)*dt*5}
+    else if(f.k>0&&f.k<P.kids.length&&f.sc<=0){f.k--;f.sc=.15;P.kids.push(f.hue);S.stolen++;snd('steal');burst(f.x,f.y,f.hue)}}}
+  const d=Math.hypot(f.x-P.x,f.y-P.y);
+  if(f.edible){if(d<P.r*3+f.r)near=.7;if(d<(P.r+f.r)*.78)eat(f,i)}
+  else{
+   const fmx=f.x+f.dir*f.r*.8,dm=Math.hypot(fmx-P.x,f.y-P.y);
+   f.mt=dm<f.r*3+P.r?.85:0;
+   if(f.cd<=0){const ki=findKid(fmx,f.y,f.r*1.2+8*u);if(ki>=0){const p=kpos(ki);P.kids.splice(ki,1);f.k++;f.mo=1;f.cd=.14;S.lost++;snd('chomp');burst(p[0],p[1],0)}}
+   if(dm<f.r*.65+P.r*.55){f.mo=1;die();return}
+  }
+  f.mo+=(f.mt-f.mo)*Math.min(1,dt*10);
+ }
+ P.mo+=(Math.max(near,S.eatT>0?1:0)-P.mo)*Math.min(1,dt*10);
+ for(let i=S.parts.length-1;i>=0;i--){const p=S.parts[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.l-=dt;if(p.l<=0)S.parts.splice(i,1)}
+ if(Math.random()<dt*4)S.bub.push({x:Math.random()*W,y:H+10,s:2+Math.random()*4});
+ for(let i=S.bub.length-1;i>=0;i--){const b=S.bub[i];b.y-=dt*(30+b.s*8);if(b.y<-10)S.bub.splice(i,1)}
+}
+
+/* ---------- วาด ---------- */
+function fishShape(x,y,r,dir,hue,o){
+ ctx.save();ctx.translate(x,y);ctx.scale(dir,1);
+ const sh=o.shark,sat=sh?8:80,lt=sh?45:58;
+ ctx.fillStyle='hsl('+hue+','+sat+'%,'+(lt-14)+'%)';
+ ctx.beginPath();ctx.moveTo(-r*.8,0);ctx.lineTo(-r*1.5,-r*.55);ctx.lineTo(-r*1.35,0);ctx.lineTo(-r*1.5,r*.55);ctx.closePath();ctx.fill();
+ if(o.spikes){ctx.strokeStyle='#ffd9a0';ctx.lineWidth=2;for(let i=0;i<7;i++){const a=-2.6+i*.28;ctx.beginPath();ctx.moveTo(Math.cos(a)*r*.5,Math.sin(a)*r*.5);ctx.lineTo(Math.cos(a)*r*1.3,Math.sin(a)*r*1.3);ctx.stroke()}}
+ ctx.fillStyle='hsl('+hue+','+sat+'%,'+lt+'%)';ctx.beginPath();ctx.ellipse(0,0,r,r*(sh?.5:.62),0,0,7);ctx.fill();
+ ctx.fillStyle=sh?'#dfe8ee':'hsl('+hue+',90%,75%)';ctx.beginPath();ctx.ellipse(r*.05,r*.22,r*.7,r*.22,0,0,7);ctx.fill();
+ if(sh){ctx.fillStyle='#4a5560';ctx.beginPath();ctx.moveTo(-r*.2,-r*.45);ctx.lineTo(r*.05,-r*1.05);ctx.lineTo(r*.3,-r*.45);ctx.fill()}
+ else{ctx.strokeStyle='hsla('+hue+',80%,30%,.55)';ctx.lineWidth=Math.max(1,r*.09);for(let i=-1;i<=1;i++){ctx.beginPath();ctx.arc(-r*.1+i*r*.3,0,r*.55,-1,1);ctx.stroke()}}
+ const mo=o.mo||0;
+ if(mo>.05){ctx.fillStyle='#4a0d16';ctx.beginPath();ctx.moveTo(r*.25,0);ctx.lineTo(r*1.08,-mo*r*.45);ctx.lineTo(r*1.08,mo*r*.45);ctx.closePath();ctx.fill();
+  if(o.danger){ctx.fillStyle='#fff';for(let t=.3;t<1;t+=.2){const x0=r*(.25+.83*t),h=mo*r*.45*t,s=r*.07;
+   ctx.beginPath();ctx.moveTo(x0-s,-h);ctx.lineTo(x0+s,-h);ctx.lineTo(x0,-h+s*2);ctx.fill();ctx.beginPath();ctx.moveTo(x0-s,h);ctx.lineTo(x0+s,h);ctx.lineTo(x0,h-s*2);ctx.fill()}}}
+ ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(r*.5,-r*.2,Math.max(2,r*.16),0,7);ctx.fill();
+ ctx.fillStyle=o.danger?'#d00':'#111';ctx.beginPath();ctx.arc(r*.55,-r*.2,Math.max(1,r*.08),0,7);ctx.fill();
+ ctx.restore();
+}
+function squid(f){const r=f.r,t=S.t;ctx.save();ctx.translate(f.x,f.y);ctx.scale(f.dir,1);
+ ctx.strokeStyle='#8a2650';ctx.lineWidth=r*.09;ctx.lineCap='round';
+ for(let i=-3;i<=3;i++){ctx.beginPath();ctx.moveTo(r*.2,i*r*.1);ctx.quadraticCurveTo(r*.7,i*r*.25+Math.sin(t*4+i)*r*.15,r*1.15,i*r*.38+Math.sin(t*3+i*2)*r*.2);ctx.stroke()}
+ ctx.fillStyle='#b23a6a';ctx.beginPath();ctx.ellipse(-r*.4,0,r*.85,r*.5,0,0,7);ctx.fill();
+ ctx.fillStyle='#d35a8a';ctx.beginPath();ctx.ellipse(r*.2,0,r*.5,r*.42,0,0,7);ctx.fill();
+ ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(r*.25,-r*.22,r*.13,0,7);ctx.arc(r*.25,r*.22,r*.13,0,7);ctx.fill();
+ ctx.fillStyle='#d00';ctx.beginPath();ctx.arc(r*.29,-r*.22,r*.06,0,7);ctx.arc(r*.29,r*.22,r*.06,0,7);ctx.fill();
+ ctx.fillStyle='#2a0510';ctx.beginPath();ctx.arc(r*.7,0,r*(.07+.16*f.mo),0,7);ctx.fill();ctx.restore()}
+
+function draw(){
+ const hue=(205+S.stage*38)%360,g=ctx.createLinearGradient(0,0,0,H);
+ g.addColorStop(0,'hsl('+hue+',70%,42%)');g.addColorStop(1,'hsl('+hue+',65%,12%)');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ ctx.fillStyle='rgba(255,255,255,.05)';for(let i=0;i<4;i++){ctx.beginPath();ctx.moveTo(W*(.1+i*.25),0);ctx.lineTo(W*(.2+i*.25),0);ctx.lineTo(W*(.05+i*.25),H);ctx.lineTo(W*(-.05+i*.25),H);ctx.fill()}
+ for(const w of weeds){ctx.strokeStyle='hsl('+((hue+90)%360)+',45%,30%)';ctx.lineWidth=7;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(w.x,H);ctx.quadraticCurveTo(w.x+Math.sin(S.t+w.p)*18,H-w.h/2,w.x+Math.sin(S.t*1.3+w.p)*26,H-w.h);ctx.stroke()}
+ ctx.fillStyle='rgba(255,255,255,.35)';for(const b of S.bub){ctx.beginPath();ctx.arc(b.x,b.y,b.s,0,7);ctx.fill()}
+ if(S.mode==='menu'||S.mode==='help'){for(let i=0;i<6;i++)fishShape((S.t*40+i*W/5)%(W+200)-100,(H*(.2+.12*i))%H,14+i*5,1,i*55,{});return}
+ for(const f of S.fish){
+  if(f.type==='squid')squid(f);else fishShape(f.x,f.y,f.r,f.dir,f.hue,{shark:f.type==='shark',danger:!f.edible,mo:f.mo});
+  ctx.fillStyle='hsl('+f.hue+',80%,65%)';for(let j=0;j<Math.min(f.k,8);j++){const a=S.t*2+j*.78+f.ph;ctx.beginPath();ctx.arc(f.x+Math.cos(a)*(f.r*1.25),f.y+Math.sin(a)*(f.r*1.25),2.5*u,0,7);ctx.fill()}}
+ if(S.sucking&&S.energy>0&&S.mode==='play'){ctx.strokeStyle='rgba(255,255,255,.3)';ctx.lineWidth=2;for(let i=0;i<4;i++){const k=(S.t*2+i/4)%1,R=(150*u+P.r*2)*(1-k);ctx.beginPath();ctx.arc(P.x+P.dir*P.r*.9,P.y,R*.5,P.dir>0?-1:Math.PI-1,P.dir>0?1:Math.PI+1);ctx.stroke()}}
+
+ // --- วาดวงล้อมรอบปลาหลัก (Zone Circle) ---
+ if(S.mode==='play'){
+  const zR = getZoneRadius();
+  ctx.save();
+  ctx.translate(P.x, P.y);
+  ctx.rotate(S.t * 0.5); // หมุนวงแหวนช้าๆ เพิ่มความมีมิติ
+
+  // พื้นหลังวงล้อมจางๆ
+  ctx.fillStyle = 'rgba(255, 215, 0, 0.05)';
+  ctx.beginPath();
+  ctx.arc(0, 0, zR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // เส้นขอบวงล้อมแบบเส้นประเรืองแสง
+  ctx.strokeStyle = 'rgba(255, 220, 100, 0.6)';
+  ctx.lineWidth = 2 * u;
+  ctx.setLineDash([8 * u, 6 * u]); // ทำเส้นประ
+  ctx.shadowColor = '#ffb02e';
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(0, 0, zR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.restore();
+ }
+
+ // วาดลูกปลา
+ for(let i=0;i<Math.min(50,P.kids.length);i++){const p=kpos(i);fishShape(p[0],p[1],4*u+1,1,P.kids[i],{})}
+ // วาดปลาตัวหลัก
+ if(S.mode!=='dead')fishShape(P.x,P.y,P.r,P.dir,24,{spikes:true,mo:P.mo});
+ for(const p of S.parts){ctx.fillStyle='hsla('+p.h+',90%,65%,'+p.l+')';ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill()}
+ hud();
+}
+function hud(){
+ ctx.textBaseline='top';ctx.shadowColor='#000a';ctx.shadowBlur=4;ctx.fillStyle='#fff6d6';ctx.font='bold 22px "Trebuchet MS",sans-serif';ctx.textAlign='left';
+ ctx.fillText('คะแนน '+S.score+'  x'+S.combo,14,10);
+ ctx.font='bold 16px sans-serif';ctx.fillText('กินแล้ว '+S.eaten+' ตัว · ลูก '+P.kids.length+' · แย่งมา '+S.stolen,14,40);
+ const tm=Math.max(0,Math.ceil(S.time)),mm=Math.floor(tm/60),ss=('0'+tm%60).slice(-2);
+ ctx.textAlign='center';ctx.font='bold 26px sans-serif';ctx.fillText(mm+':'+ss,W/2,8);ctx.font='14px sans-serif';ctx.fillText('ด่าน '+S.stage,W/2,38);
+ ctx.shadowBlur=0;ctx.fillStyle='rgba(0,0,0,.45)';ctx.fillRect(W-156,16,140,12);ctx.fillStyle='#ffb02e';ctx.fillRect(W-156,16,140*S.energy,12);
+ ctx.textAlign='right';ctx.font='13px sans-serif';ctx.fillStyle='#fff6d6';ctx.fillText('พลังดูด',W-16,32);
+ if(S.flash>0){ctx.strokeStyle='rgba(255,40,40,'+(.55*Math.abs(Math.sin(S.t*6)))+')';ctx.lineWidth=14;ctx.strokeRect(7,7,W-14,H-14)}
+ if(S.ban>0){ctx.globalAlpha=Math.min(1,S.ban);ctx.textAlign='center';ctx.font='bold 32px sans-serif';ctx.shadowBlur=8;ctx.fillStyle=S.bt[0]==='⚠'?'#ff6b6b':'#ffe08a';ctx.fillText(S.bt,W/2,H*.25);ctx.globalAlpha=1;ctx.shadowBlur=0}
+}
+
+/* ---------- ควบคุม ---------- */
+let last=performance.now();
+function loop(n){const dt=Math.min(.05,(n-last)/1000);last=n;update(dt);draw();requestAnimationFrame(loop)}
+let jp=null;
+function jm(e){const b=joy.getBoundingClientRect();let dx=e.clientX-(b.left+b.width/2),dy=e.clientY-(b.top+b.height/2);const m=Math.hypot(dx,dy),R=52;if(m>R){dx*=R/m;dy*=R/m}
+ knob.style.transform='translate('+dx+'px,'+dy+'px)';const k=Math.hypot(dx,dy)/R;S.inp.x=k<.12?0:dx/R;S.inp.y=k<.12?0:dy/R}
+joy.addEventListener('pointerdown',e=>{jp=e.pointerId;joy.setPointerCapture(jp);jm(e)});
+joy.addEventListener('pointermove',e=>{if(e.pointerId===jp)jm(e)});
+const jend=e=>{if(e.pointerId===jp){jp=null;S.inp.x=S.inp.y=0;knob.style.transform='translate(0,0)'}};
+joy.addEventListener('pointerup',jend);joy.addEventListener('pointercancel',jend);
+sb.addEventListener('pointerdown',e=>{sb.setPointerCapture(e.pointerId);S.sucking=true});
+['pointerup','pointercancel'].forEach(t=>sb.addEventListener(t,()=>S.sucking=false));
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='Space'){S.sucking=true;e.preventDefault()}});
+addEventListener('keyup',e=>{keys[e.code]=0;if(e.code==='Space')S.sucking=false});
+menu();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
